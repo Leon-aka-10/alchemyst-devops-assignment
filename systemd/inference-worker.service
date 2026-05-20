@@ -1,0 +1,23 @@
+[Unit]
+Description=iii Inference Worker — Gemma 3 270m
+After=network-online.target iii-engine.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=azureuser
+WorkingDirectory=/opt/inference-worker
+# III_URL set to engine VM private IP at deploy time by Ansible
+Environment="III_URL=ws://ENGINE_PRIVATE_IP:49134"
+ExecStart=/usr/bin/python3 inference_worker.py
+Restart=always
+RestartSec=15
+# Model loading takes ~30s — give it time before systemd considers it failed
+TimeoutStartSec=120
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=inference-worker
+
+[Install]
+WantedBy=multi-user.target

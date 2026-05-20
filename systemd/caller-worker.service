@@ -1,0 +1,20 @@
+[Unit]
+Description=iii Caller Worker — TypeScript HTTP Bridge
+After=network-online.target iii-engine.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=azureuser
+WorkingDirectory=/opt/caller-worker
+Environment="III_URL=ws://ENGINE_PRIVATE_IP:49134"
+ExecStart=/usr/bin/npx tsx src/worker.ts
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=caller-worker
+
+[Install]
+WantedBy=multi-user.target
