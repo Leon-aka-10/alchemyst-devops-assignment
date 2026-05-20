@@ -1,0 +1,38 @@
+---
+- name: Deploy NGINX gateway
+  hosts: gateway
+  become: true
+
+  tasks:
+    - name: Install NGINX
+      apt:
+        name: nginx
+        state: present
+        update_cache: yes
+
+    - name: Deploy NGINX config with engine IP
+      template:
+        src: ../gateway/nginx.conf
+        dest: /etc/nginx/sites-available/alchemyst
+      vars:
+        engine_ip: "{{ engine_ip }}"
+
+    - name: Enable site
+      file:
+        src: /etc/nginx/sites-available/alchemyst
+        dest: /etc/nginx/sites-enabled/alchemyst
+        state: link
+
+    - name: Remove default site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+
+    - name: Test NGINX config
+      command: nginx -t
+
+    - name: Reload NGINX
+      systemd:
+        name: nginx
+        state: reloaded
+        enabled: yes

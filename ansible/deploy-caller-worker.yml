@@ -1,0 +1,65 @@
+---
+- name: Deploy caller worker
+  hosts: caller
+  become: true
+
+  tasks:
+    - name: Install Node.js and npm
+      apt:
+        name:
+          - nodejs
+          - npm
+        state: present
+        update_cache: yes
+
+    - name: Create caller worker directory
+      file:
+        path: /opt/caller-worker
+        state: directory
+        owner: azureuser
+
+    - name: Copy caller worker files
+      copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        owner: azureuser
+      loop:
+        - { src: ../workers/caller-worker/package.json, dest: /opt/caller-worker/package.json }
+        - { src: ../workers/caller-worker/tsconfig.json, dest: /opt/caller-worker/tsconfig.json }
+        - { src: ../workers/caller-worker/src/worker.ts, dest: /opt/caller-worker/src/worker.ts }
+
+    - name: Ensure src directory exists
+      file:
+        path: /opt/caller-worker/src
+        state: directory
+        owner: azureuser
+
+    - name: Install caller worker dependencies
+      npm:
+        path: /opt/caller-worker
+
+    - name: Install TypeScript globally
+      npm:
+        name: typescript
+        global: yes
+
+    - name: Build TypeScript worker
+      shell: |
+        cd /opt/caller-worker
+        npx tsc
+      args:
+        executable: /bin/bash
+
+    - name: Install systemd service with engine IP
+      template:
+        src: ../systemd/caller-worker.service
+        dest: /etc/systemd/system/caller-worker.service
+      vars:
+        engine_ip: "{{ engine_ip }}"
+
+    - name: Enable and start caller worker
+      systemd:
+        name: caller-worker
+        enabled: yes
+        state: started
+        daemon_reload: yes
