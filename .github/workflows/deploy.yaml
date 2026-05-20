@@ -1,0 +1,142 @@
+name: Deploy Alchemyst Infrastructure
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'README.md'
+      - '.github/workflows/destroy.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    name: Provision infrastructure
+    runs-on: ubuntu-latest
+    outputs:
+      gateway_ip:       ${{ steps.outputs.outputs.gateway_ip }}
+      engine_ip:        ${{ steps.outputs.outputs.engine_ip }}
+      inference_ip:     ${{ steps.outputs.outputs.inference_ip }}
+      caller_ip:        ${{ steps.outputs.outputs.caller_ip }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        run: |
+          az login \
+            --username "${{ secrets.AZURE_USERNAME }}" \
+            --password "${{ secrets.AZURE_PASSWORD }}"
+          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.x"
+
+      - name: Terraform init
+        env:
+          ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
+        run: terraform init
+        working-directory: terraform/
+
+      - name: Terraform apply
+        env:
+          ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
+        run: |
+          terraform apply -auto-approve \
+            -var="admin_ssh_public_key=${{ secrets.SSH_PUBLIC_KEY }}" \
+            -var="admin_ip=${{ secrets.ADMIN_IP }}"
+        working-directory: terraform/
+
+      - name: Capture outputs
+        id: outputs
+        env:
+          ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
+        run: |
+          echo "gateway_ip=$(terraform output -raw gateway_public_ip)"   >> $GITHUB_OUTPUT
+          echo "engine_ip=$(terraform output -raw engine_private_ip)"    >> $GITHUB_OUTPUT
+          echo "inference_ip=$(terraform output -raw inference_private_ip)" >> $GITHUB_OUTPUT
+          echo "caller_ip=$(terraform output -raw caller_private_ip)"    >> $GITHUB_OUTPUT
+        working-directory: terraform/
+
+  deploy-workers:
+    name: Deploy workers via Ansible
+    runs-on: ubuntu-latest
+    needs: terraform
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ansible
+        run: pip install ansible --break-system-packages -q
+
+      - name: Write SSH key
+        run: |
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+
+      - name: Build Ansible inventory
+        run: |
+          cat > ansible/inventory.ini << EOF
+          [gateway]
+          ${{ needs.terraform.outputs.gateway_ip }} ansible_user=azureuser ansible_ssh_private_key_file=/tmp/deploy_key
+
+          [engine]
+          ${{ needs.terraform.outputs.engine_ip }} ansible_user=azureuser ansible_ssh_private_key_file=/tmp/deploy_key ansible_ssh_common_args='-o ProxyJump=azureuser@${{ needs.terraform.outputs.gateway_ip }}'
+
+          [inference]
+          ${{ needs.terraform.outputs.inference_ip }} ansible_user=azureuser ansible_ssh_private_key_file=/tmp/deploy_key ansible_ssh_common_args='-o ProxyJump=azureuser@${{ needs.terraform.outputs.gateway_ip }}'
+
+          [caller]
+          ${{ needs.terraform.outputs.caller_ip }} ansible_user=azureuser ansible_ssh_private_key_file=/tmp/deploy_key ansible_ssh_common_args='-o ProxyJump=azureuser@${{ needs.terraform.outputs.gateway_ip }}'
+          EOF
+
+      - name: Deploy iii engine
+        env:
+          ENGINE_IP: ${{ needs.terraform.outputs.engine_ip }}
+        run: |
+          ansible-playbook -i ansible/inventory.ini ansible/deploy-engine.yml \
+            -e "engine_ip=$ENGINE_IP"
+
+      - name: Deploy inference worker
+        env:
+          ENGINE_IP: ${{ needs.terraform.outputs.engine_ip }}
+        run: |
+          ansible-playbook -i ansible/inventory.ini ansible/deploy-inference-worker.yml \
+            -e "engine_ip=$ENGINE_IP"
+
+      - name: Deploy caller worker
+        env:
+          ENGINE_IP: ${{ needs.terraform.outputs.engine_ip }}
+        run: |
+          ansible-playbook -i ansible/inventory.ini ansible/deploy-caller-worker.yml \
+            -e "engine_ip=$ENGINE_IP"
+
+      - name: Deploy NGINX gateway
+        env:
+          CALLER_IP: ${{ needs.terraform.outputs.caller_ip }}
+        run: |
+          ansible-playbook -i ansible/inventory.ini ansible/deploy-gateway.yml \
+            -e "caller_ip=$CALLER_IP"
+
+      - name: Health check
+        run: |
+          GATEWAY="${{ needs.terraform.outputs.gateway_ip }}"
+          echo "Waiting for gateway to be ready..."
+          for i in $(seq 1 12); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://${GATEWAY}/health" || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "Gateway healthy on attempt $i"
+              break
+            fi
+            echo "Attempt $i: HTTP $STATUS — waiting 15s..."
+            sleep 15
+          done
+
+      - name: Smoke test inference endpoint
+        run: |
+          GATEWAY="${{ needs.terraform.outputs.gateway_ip }}"
+          curl -s -X POST "http://${GATEWAY}/v1/chat/completions" \
+            -H "Content-Type: application/json" \
+            -d '{"messages":[{"role":"user","content":"Say hello in one sentence."}]}'
