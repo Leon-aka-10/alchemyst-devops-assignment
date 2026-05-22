@@ -3,9 +3,14 @@ output "gateway_public_ip" {
   value       = azurerm_public_ip.gateway_ip.ip_address
 }
 
+output "gateway_private_ip" {
+  description = "Private IP of gateway VM — also runs iii engine"
+  value       = azurerm_network_interface.nic["gateway"].private_ip_address
+}
+
 output "engine_private_ip" {
-  description = "Private IP of iii engine VM"
-  value       = azurerm_network_interface.nic["engine"].private_ip_address
+  description = "iii engine runs on gateway VM — same IP"
+  value       = azurerm_network_interface.nic["gateway"].private_ip_address
 }
 
 output "inference_private_ip" {
@@ -19,6 +24,6 @@ output "caller_private_ip" {
 }
 
 output "resource_group" {
-  description = "Resource group — use this to verify teardown"
+  description = "Resource group name"
   value       = azurerm_resource_group.rg.name
 }

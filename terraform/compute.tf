@@ -12,17 +12,11 @@ locals {
       size   = var.vm_size_gateway
       disk   = 30
     }
-    engine = {
-      subnet = azurerm_subnet.private.id
-      nsg    = azurerm_network_security_group.worker_nsg.id
-      size   = var.vm_size_engine
-      disk   = 30
-    }
     inference = {
       subnet = azurerm_subnet.private.id
       nsg    = azurerm_network_security_group.worker_nsg.id
       size   = var.vm_size_inference
-      disk   = 40   # extra space for GGUF model file (~270MB) + pip cache
+      disk   = 40
     }
     caller = {
       subnet = azurerm_subnet.private.id

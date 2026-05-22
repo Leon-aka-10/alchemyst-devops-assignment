@@ -121,16 +121,12 @@ jobs:
       - name: Build Ansible inventory
         run: |
           GATEWAY="${{ needs.provision.outputs.gateway_ip }}"
-          ENGINE="${{ needs.provision.outputs.engine_ip }}"
           INFERENCE="${{ needs.provision.outputs.inference_ip }}"
           CALLER="${{ needs.provision.outputs.caller_ip }}"
 
           cat > ansible/inventory.ini << EOF
           [gateway]
           ${GATEWAY} ansible_user=azureuser ansible_ssh_private_key_file=/tmp/deploy_key ansible_ssh_extra_args='-o StrictHostKeyChecking=no'
-
-          [engine]
-          ${ENGINE} ansible_user=azureuser ansible_ssh_private_key_file=/tmp/deploy_key ansible_ssh_extra_args='-o StrictHostKeyChecking=no -o ProxyJump=azureuser@${GATEWAY}'
 
           [inference]
           ${INFERENCE} ansible_user=azureuser ansible_ssh_private_key_file=/tmp/deploy_key ansible_ssh_extra_args='-o StrictHostKeyChecking=no -o ProxyJump=azureuser@${GATEWAY}'
@@ -155,10 +151,11 @@ jobs:
             sleep 20
           done
 
-      - name: Deploy iii engine
+      - name: Deploy iii engine + NGINX gateway
         run: |
           ansible-playbook -i ansible/inventory.ini \
-            ansible/deploy-engine.yml
+            ansible/deploy-gateway.yml \
+            -e "engine_ip=${{ needs.provision.outputs.engine_ip }}"
 
       - name: Deploy inference worker
         run: |
@@ -170,12 +167,6 @@ jobs:
         run: |
           ansible-playbook -i ansible/inventory.ini \
             ansible/deploy-caller-worker.yml \
-            -e "engine_ip=${{ needs.provision.outputs.engine_ip }}"
-
-      - name: Deploy NGINX gateway
-        run: |
-          ansible-playbook -i ansible/inventory.ini \
-            ansible/deploy-gateway.yml \
             -e "engine_ip=${{ needs.provision.outputs.engine_ip }}"
 
       - name: Health check — gateway /health endpoint
@@ -236,10 +227,11 @@ jobs:
       - name: Terraform destroy
         env:
           ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
-          TF_VAR_admin_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
           TF_VAR_admin_ip: ${{ secrets.ADMIN_IP }}
         run: |
-          echo "Pipeline failed — destroying infrastructure to avoid billing..."
+          echo "Pipeline failed — waiting 3 minutes for Azure NIC reservations to clear..."
+          sleep 180
+          echo "Destroying infrastructure..."
           terraform destroy -auto-approve
         working-directory: terraform/
 
