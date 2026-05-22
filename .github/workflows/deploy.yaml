@@ -21,14 +21,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
       - name: Install Python deps
-        run: pip install iii-sdk==0.11.0 transformers torch --quiet
+        run: pip install flake8 --quiet
 
       - name: Lint inference worker
-        run: |
-          pip install flake8 --quiet
-          flake8 workers/inference-worker/ --max-line-length=120
+        run: flake8 workers/inference-worker/ --max-line-length=120
 
       - uses: actions/setup-node@v4
         with:
@@ -55,7 +54,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Student account auth — no service principal available
+      # Student account auth — no service principal available on university AD tenant
       - name: Azure CLI login
         run: |
           az login \
@@ -74,24 +73,25 @@ jobs:
         run: terraform init
         working-directory: terraform/
 
+      # TF_VAR_ pattern used instead of -var flags
+      # Prevents shell misinterpretation of SSH key special characters (spaces, ==)
       - name: Terraform apply
         env:
           ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
-        run: |
-          terraform apply -auto-approve \
-            -var="admin_ssh_public_key=${{ secrets.SSH_PUBLIC_KEY }}" \
-            -var="admin_ip=${{ secrets.ADMIN_IP }}"
+          TF_VAR_admin_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+          TF_VAR_admin_ip: ${{ secrets.ADMIN_IP }}
+        run: terraform apply -auto-approve
         working-directory: terraform/
 
-      - name: Capture outputs
+      - name: Capture Terraform outputs
         id: tf_out
         env:
           ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
         run: |
-          echo "gateway_ip=$(terraform output -raw gateway_public_ip)"     >> $GITHUB_OUTPUT
-          echo "engine_ip=$(terraform output -raw engine_private_ip)"      >> $GITHUB_OUTPUT
-          echo "inference_ip=$(terraform output -raw inference_private_ip)" >> $GITHUB_OUTPUT
-          echo "caller_ip=$(terraform output -raw caller_private_ip)"      >> $GITHUB_OUTPUT
+          echo "gateway_ip=$(terraform output -raw gateway_public_ip)"       >> $GITHUB_OUTPUT
+          echo "engine_ip=$(terraform output -raw engine_private_ip)"        >> $GITHUB_OUTPUT
+          echo "inference_ip=$(terraform output -raw inference_private_ip)"  >> $GITHUB_OUTPUT
+          echo "caller_ip=$(terraform output -raw caller_private_ip)"        >> $GITHUB_OUTPUT
         working-directory: terraform/
 
   deploy:
@@ -131,10 +131,11 @@ jobs:
           ${CALLER} ansible_user=azureuser ansible_ssh_private_key_file=/tmp/deploy_key ansible_ssh_extra_args='-o StrictHostKeyChecking=no -o ProxyJump=azureuser@${GATEWAY}'
           EOF
 
-      - name: Wait for VMs to be SSH-ready
+      - name: Wait for gateway VM to be SSH-ready
         run: |
           GATEWAY="${{ needs.provision.outputs.gateway_ip }}"
-          for i in $(seq 1 12); do
+          echo "Waiting for gateway SSH on ${GATEWAY}..."
+          for i in $(seq 1 15); do
             if ssh -o StrictHostKeyChecking=no \
                    -o ConnectTimeout=5 \
                    -i /tmp/deploy_key \
@@ -142,8 +143,8 @@ jobs:
               echo "Gateway SSH ready on attempt $i"
               break
             fi
-            echo "Attempt $i — waiting 15s..."
-            sleep 15
+            echo "Attempt $i — waiting 20s..."
+            sleep 20
           done
 
       - name: Deploy iii engine
@@ -169,9 +170,10 @@ jobs:
             ansible/deploy-gateway.yml \
             -e "engine_ip=${{ needs.provision.outputs.engine_ip }}"
 
-      - name: Health check
+      - name: Health check — gateway /health endpoint
         run: |
           GATEWAY="${{ needs.provision.outputs.gateway_ip }}"
+          echo "Polling http://${GATEWAY}/health ..."
           for i in $(seq 1 12); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
               "http://${GATEWAY}/health" || echo "000")
@@ -185,10 +187,10 @@ jobs:
           echo "Health check failed after 12 attempts"
           exit 1
 
-      - name: Smoke test inference endpoint
+      - name: Smoke test — inference endpoint
         run: |
           GATEWAY="${{ needs.provision.outputs.gateway_ip }}"
-          echo "Running inference smoke test..."
+          echo "Sending test inference request to http://${GATEWAY}/v1/chat/completions ..."
           curl -s -X POST "http://${GATEWAY}/v1/chat/completions" \
             -H "Content-Type: application/json" \
             -d '{"messages":[{"role":"user","content":"Say hello in one sentence."}]}' \
@@ -226,9 +228,16 @@ jobs:
       - name: Terraform destroy
         env:
           ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
+          TF_VAR_admin_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+          TF_VAR_admin_ip: ${{ secrets.ADMIN_IP }}
         run: |
           echo "Pipeline failed — destroying infrastructure to avoid billing..."
-          terraform destroy -auto-approve \
-            -var="admin_ssh_public_key=${{ secrets.SSH_PUBLIC_KEY }}" \
-            -var="admin_ip=${{ secrets.ADMIN_IP }}"
+          terraform destroy -auto-approve
         working-directory: terraform/
+
+      - name: Confirm destruction
+        run: |
+          echo "Infrastructure destroyed. Checking remaining resources..."
+          az group list \
+            --query "[?starts_with(name,'rg-alchemyst')].{Name:name,State:properties.provisioningState}" \
+            -o table
