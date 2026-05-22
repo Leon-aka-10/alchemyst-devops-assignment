@@ -73,6 +73,14 @@ jobs:
         run: terraform init
         working-directory: terraform/
 
+      - name: Debug SSH key
+        run: |
+          echo "SSH_PUBLIC_KEY length: ${#SSH_PUB}"
+          echo "First 20 chars: ${SSH_PUB:0:20}"
+          echo "Starts with ssh-rsa: $(echo $SSH_PUB | grep -c 'ssh-rsa')"
+        env:
+          SSH_PUB: ${{ secrets.SSH_PUBLIC_KEY }}
+
       # TF_VAR_ pattern used instead of -var flags
       # Prevents shell misinterpretation of SSH key special characters (spaces, ==)
       - name: Terraform apply
