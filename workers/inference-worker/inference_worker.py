@@ -88,4 +88,3 @@ def run_inference_handler(payload: Dict[str, Any]) -> Dict[str, Any]:
 iii.register_function("inference::run_inference", run_inference_handler)
 
 print("Inference worker started - listening for calls")
-
