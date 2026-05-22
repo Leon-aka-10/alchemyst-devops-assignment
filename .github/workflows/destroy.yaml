@@ -35,10 +35,8 @@ jobs:
       - name: Terraform destroy
         env:
           ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
-        run: |
-          terraform destroy -auto-approve \
-            -var="admin_ssh_public_key=${{ secrets.SSH_PUBLIC_KEY }}" \
-            -var="admin_ip=${{ secrets.ADMIN_IP }}"
+          TF_VAR_admin_ip: ${{ secrets.ADMIN_IP }}
+        run: terraform destroy -auto-approve -lock=false
         working-directory: terraform/
 
       - name: Verify resource group gone
