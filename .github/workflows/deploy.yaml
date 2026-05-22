@@ -232,7 +232,8 @@ jobs:
           echo "Pipeline failed — waiting 3 minutes for Azure NIC reservations to clear..."
           sleep 180
           echo "Destroying infrastructure..."
-          terraform destroy -auto-approve
+          # -lock=false handles cases where provision job still holds the lock
+          terraform destroy -auto-approve -lock=false
         working-directory: terraform/
 
       - name: Confirm destruction
