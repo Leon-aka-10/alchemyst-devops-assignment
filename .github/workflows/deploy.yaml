@@ -139,16 +139,19 @@ jobs:
         run: |
           GATEWAY="${{ needs.provision.outputs.gateway_ip }}"
           echo "Waiting for gateway SSH on ${GATEWAY}..."
-          for i in $(seq 1 15); do
-            if ssh -o StrictHostKeyChecking=no \
-                   -o ConnectTimeout=5 \
-                   -i /tmp/deploy_key \
-                   azureuser@${GATEWAY} "echo ready" 2>/dev/null; then
+          for i in $(seq 1 20); do
+            RESULT=$(ssh -o StrictHostKeyChecking=no \
+                        -o ConnectTimeout=15 \
+                        -o BatchMode=yes \
+                        -i /tmp/deploy_key \
+                        azureuser@${GATEWAY} "echo ready" 2>&1)
+            if echo "$RESULT" | grep -q "ready"; then
               echo "Gateway SSH ready on attempt $i"
               break
             fi
-            echo "Attempt $i — waiting 20s..."
-            sleep 20
+            echo "Attempt $i result: $RESULT"
+            echo "Waiting 30s..."
+            sleep 30
           done
 
       - name: Deploy iii engine + NGINX gateway
